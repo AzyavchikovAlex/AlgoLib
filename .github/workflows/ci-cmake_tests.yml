@@ -3,7 +3,7 @@ name: CMake Tests
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
 
     defaults:

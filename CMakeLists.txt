@@ -1,20 +1,14 @@
 # Required by FetchContent_MakeAvailable
 cmake_minimum_required(VERSION 3.14)
-project(Foo)
+project(AZLib)
 
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG        v1.14.0
-)
-FetchContent_MakeAvailable(googletest)
-
-set(CMAKE_CXX_STANDARD 11)
-set(TEST_NAME ${PROJECT_NAME}_tests)
-add_executable(${TEST_NAME} foo_test.cc)
-target_link_libraries(${TEST_NAME} gtest_main)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_INCLUDE_CURRENT_DIR ON)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20 -pthread")
 
 enable_testing()
-include(GoogleTest)
-gtest_discover_tests(${TEST_NAME})
+
+add_subdirectory (RadixSort)
+
+##set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer -fsanitize=address")
+##set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -fno-omit-frame-pointer -fsanitize=address")

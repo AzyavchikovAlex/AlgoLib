@@ -1,6 +1,6 @@
 version: 4
 jobs:
-  build:
+  build-and-test:
     docker:
       - image: cimg/base:stable
     working_directory: ~/circleci-googletest
