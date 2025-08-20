@@ -3,55 +3,119 @@
 #pragma once
 
 #include <vector>
+#include <array>
 #include <cstdint>
-#include <stddef.h>
+#include <cstddef>
 #include <limits>
+#include <cstring>
+#include <tuple>
+#include <algorithm>
 
+template<
+    size_t WIDTH = 8,
+    uint64_t REMINDER_GETTER = (uint64_t(1 << WIDTH) - 1)
+>
+void RadixSort(auto containerBegin,
+               auto containerEnd,
+               const auto& getRadixIndex) {
+  static constexpr size_t radixIndexWidth = 64;
+  static constexpr size_t bucketsCount = 1 << WIDTH;
+  static constexpr size_t minArraySize = bucketsCount;
 
-// warning: not thread safe!
-template<typename T, typename K>
-void RadixSortAsc(std::vector<T> &values, K getRadixIndex) {
-  constexpr size_t REMINDER_WIDTH = 16;
-  constexpr uint64_t BUCKETS_COUNT = (static_cast<uint64_t>(1) << REMINDER_WIDTH);
-  constexpr size_t ITERATIONS_COUNT = (64 / (REMINDER_WIDTH)) + (64 % (REMINDER_WIDTH) == 0 ? 0 : 1);
-  static std::vector<size_t> buckets(BUCKETS_COUNT);
+  auto sortComparator = [&getRadixIndex](const auto& x, const auto& y) {
+    return getRadixIndex(x) < getRadixIndex(y);
+  };
+  std::array<size_t, bucketsCount> bucketsBegin, bucketsInsertIndex;
+  std::vector<std::tuple<decltype(containerBegin),
+                         decltype(containerEnd),
+                         size_t>> segments;
+  segments.emplace_back(containerBegin, containerEnd, radixIndexWidth - WIDTH);
 
-  const size_t valuesCount = values.size();
-  static std::vector<T> buffer;
-  buffer.resize(valuesCount);
-
-  for (size_t iteration = 0; iteration < ITERATIONS_COUNT; ++iteration) {
-    const uint64_t shift = iteration * REMINDER_WIDTH;
-    const uint64_t reminderGetter = (BUCKETS_COUNT - 1) << shift;
-    for (size_t i = 0; i < BUCKETS_COUNT; ++i) {
-      buckets[i] = 0;
+  while (!segments.empty()) {
+    auto [begin, end, shift] = segments.back();
+    segments.pop_back();
+    // don't sort too small arrays
+    if (std::distance(begin, end) < minArraySize) {
+      std::sort(begin, end, sortComparator);
+      continue;
     }
-    size_t max = 0;
-    for (size_t i = 0; i < valuesCount; ++i) {
-      max = ++buckets[((getRadixIndex(values[i]) & reminderGetter) >> shift)];
+
+    auto getBucketIndex = [&getRadixIndex, shift](const auto& it) -> size_t {
+      return (getRadixIndex(*it) >> shift) & REMINDER_GETTER;
+    };
+
+    // distribute values over buckets
+    memset(bucketsBegin.data(), 0, sizeof(bucketsBegin));
+    for (auto it = begin; it != end; ++it) {
+      ++bucketsBegin[getBucketIndex(it)];
     }
-    if (max == valuesCount) {
-      continue; // already sorted
-    } {
-      size_t bufferCount = 0;
-      for (size_t i = 0, prevCount = 0; i < BUCKETS_COUNT; ++i) {
-        bufferCount = buckets[i];
-        buckets[i] = prevCount;
-        prevCount += bufferCount;
+    if (uint64_t index = getBucketIndex(begin);
+        bucketsBegin[index] == std::distance(begin, end)) {
+      if (shift > 0) {
+        segments.emplace_back(begin, end, shift - WIDTH);
+      }
+      continue;
+    }
+    size_t prevCount = 0;
+    size_t count = 0;
+    for (size_t i = 0; i < bucketsCount; ++i) {
+      count = bucketsBegin[i];
+      bucketsInsertIndex[i] = bucketsBegin[i] = prevCount;
+      prevCount += count;
+    }
+
+    // put each element in it bucket
+    for (auto it = begin; it != end;) {
+      size_t bucketIndex = getBucketIndex(it);
+      size_t& insertIndex = bucketsInsertIndex[bucketIndex];
+      const size_t index = std::distance(begin, it);
+      if (index == insertIndex) {
+        ++it;
+        ++insertIndex;
+      } else if (index >= bucketsBegin[bucketIndex] && index < insertIndex) {
+        ++it;
+      } else {
+        std::swap(*it, *std::next(begin, insertIndex));
+        ++insertIndex;
       }
     }
 
-    for (size_t i = 0; i < valuesCount; ++i) {
-      buffer[buckets[((getRadixIndex(values[i]) & reminderGetter) >> shift)]++] = values[i];
+    if (shift == 0) {
+      continue;
     }
-    std::swap(buffer, values);
+
+    for (size_t i = 0; i < bucketsCount; ++i) {
+      int l = bucketsBegin[i];
+      int r = bucketsInsertIndex[i];
+      if (r - l < minArraySize) {
+        std::sort(std::next(begin, l),
+                  std::next(begin, r),
+                  sortComparator);
+      } else {
+        segments.emplace_back(std::next(begin, l),
+                              std::next(begin, r),
+                              shift - WIDTH);
+      }
+    }
   }
 }
 
-template<typename T, typename K>
-void RadixSortDesc(std::vector<T> &values, K getRadixIndex) {
-  static constexpr uint64_t maxRadixIndex = std::numeric_limits<uint64_t>::max();
-  RadixSortAsc(values, [&getRadixIndex](const T &value) {
-    return maxRadixIndex - getRadixIndex(value);
+void RadixSortAsc(auto begin, auto end, auto&& getRadixIndex) {
+  constexpr size_t optimalStdSortArraySize = 1 << 12;
+
+  if (std::distance(begin, end) >= optimalStdSortArraySize) {
+    RadixSort<8>(begin, end, getRadixIndex);
+  } else {
+    std::sort(begin, end, [&getRadixIndex](const auto& x, const auto& y) {
+      return getRadixIndex(x) < getRadixIndex(y);
+    });
+  }
+}
+
+void RadixSortDesc(auto begin, auto end, auto&& getRadixIndex) {
+  static constexpr uint64_t maxIndex = std::numeric_limits<uint64_t>::max();
+
+  RadixSortAsc(begin, end, [&getRadixIndex](const auto& value) {
+    return maxIndex - getRadixIndex(value);
   });
 }
