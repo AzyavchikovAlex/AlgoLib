@@ -5,7 +5,7 @@ and for each run takes about 2KB additional space
 
 ## Performance comparison with std::sort
 
-![plot](./RadixSort/benchmark_comparison.png "Optional title")
+![plot](./benchmark_comparison.png "Optional title")
 
 Run on (12 X 4024.01 MHz CPU s)
 
