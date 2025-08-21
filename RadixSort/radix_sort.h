@@ -34,11 +34,6 @@ void RadixSort(auto containerBegin,
   while (!segments.empty()) {
     auto [begin, end, shift] = segments.back();
     segments.pop_back();
-    // don't sort too small arrays
-    if (std::distance(begin, end) < minArraySize) {
-      std::sort(begin, end, sortComparator);
-      continue;
-    }
 
     auto getBucketIndex = [&getRadixIndex, shift](const auto& it) -> size_t {
       return (getRadixIndex(*it) >> shift) & REMINDER_GETTER;
