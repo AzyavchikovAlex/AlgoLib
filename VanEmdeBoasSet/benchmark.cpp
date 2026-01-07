@@ -14,7 +14,7 @@ constexpr int SEED = 42;
 std::vector<uint32_t> GenerateRandomData(size_t size) {
   std::vector<uint32_t> data(size);
   std::mt19937 gen(SEED);
-  std::uniform_int_distribution<uint32_t> dist(0, 10000000);
+  std::uniform_int_distribution<uint32_t> dist(0, std::numeric_limits<uint32_t>::max());
   for (auto& x : data) {
     x = dist(gen);
   }
@@ -112,28 +112,28 @@ using VEB32 = TVEBSet<32>;
 // 1. Insert
 BENCHMARK_TEMPLATE(BM_Insert, StdSet)
     ->Name("StdSet_Insert")
-    ->RangeMultiplier(2)->Range(1 << 12, 1 << 19);
+    ->RangeMultiplier(2)->Range(1 << 12, 1 << 21);
 
 BENCHMARK_TEMPLATE(BM_Insert, VEB32)
     ->Name("TVEBSet_Insert")
-    ->RangeMultiplier(2)->Range(1 << 12, 1 << 19);
+    ->RangeMultiplier(2)->Range(1 << 12, 1 << 21);
 
 // 2. Contains
 BENCHMARK_TEMPLATE(BM_Contains, StdSet)
     ->Name("StdSet_Contains")
-    ->RangeMultiplier(2)->Range(1 << 12, 1 << 19);
+    ->RangeMultiplier(2)->Range(1 << 12, 1 << 21);
 
 BENCHMARK_TEMPLATE(BM_Contains, VEB32)
     ->Name("TVEBSet_Contains")
-    ->RangeMultiplier(2)->Range(1 << 12, 1 << 19);
+    ->RangeMultiplier(2)->Range(1 << 12, 1 << 21);
 
 // 3. Next (Upper Bound)
 BENCHMARK_TEMPLATE(BM_Next, StdSet)
     ->Name("StdSet_Next")
-    ->RangeMultiplier(2)->Range(1 << 10, 1 << 20);
+    ->RangeMultiplier(2)->Range(1 << 10, 1 << 21);
 
 BENCHMARK_TEMPLATE(BM_Next, VEB32)
     ->Name("TVEBSet_Next")
-    ->RangeMultiplier(2)->Range(1 << 10, 1 << 20);
+    ->RangeMultiplier(2)->Range(1 << 10, 1 << 21);
 
 BENCHMARK_MAIN();
