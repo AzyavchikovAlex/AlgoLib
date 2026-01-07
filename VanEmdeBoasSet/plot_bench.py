@@ -75,7 +75,8 @@ def plot_benchmarks(json_file):
         plt.legend(title="Data Structure")
         plt.tight_layout()
 
-        filename = f"benchmark_{op}.png"
+        # filename = f"benchmark_{op}.png"
+        filename = f"benchmark_{op}_log_scale.png"
         plt.savefig(filename)
         print(f"Saved plot to {filename}")
         plt.show()

@@ -9,160 +9,139 @@
 #include <cstdint>
 #include <memory>
 #include <type_traits>
-#include <map>
 
 namespace veb {
 
-namespace {
-
-// ==========================================
-// POOL ALLOCATOR
-// ==========================================
-template<size_t ObjectSize, size_t ChunkSize = 16384>
-class PoolAllocator {
-  struct Node {
-    Node* next;
-  };
-
-  static Node* FreeHead;
-  static char* CurrentChunk;
-  static size_t CurrentOffset;
-  static std::vector<char*> Chunks;
-
- public:
-  static void* allocate(size_t n) {
-    if (n != ObjectSize) {
-      return ::operator new(n);
-    }
-    if (FreeHead) {
-      void* ptr = FreeHead;
-      FreeHead = FreeHead->next;
-      return ptr;
-    }
-    if (!CurrentChunk || CurrentOffset + ObjectSize > ChunkSize) {
-      CurrentChunk = new char[ChunkSize];
-      Chunks.push_back(CurrentChunk);
-      CurrentOffset = 0;
-    }
-    void* ptr = CurrentChunk + CurrentOffset;
-    CurrentOffset += ObjectSize;
-    return ptr;
-  }
-
-  static void deallocate(void* ptr, size_t n) {
-    if (n != ObjectSize) {
-      ::operator delete(ptr);
-      return;
-    }
-    if (!ptr) return;
-    Node* node = static_cast<Node*>(ptr);
-    node->next = FreeHead;
-    FreeHead = node;
-  }
-
-  static void cleanup() {
-    for (char* chunk : Chunks) delete[] chunk;
-    Chunks.clear();
-    FreeHead = nullptr;
-    CurrentChunk = nullptr;
-    CurrentOffset = 0;
-  }
-};
-
-template<size_t S, size_t C> typename PoolAllocator<S, C>::Node
-    * PoolAllocator<S, C>::FreeHead = nullptr;
-template<size_t S, size_t C> char* PoolAllocator<S, C>::CurrentChunk = nullptr;
-template<size_t S, size_t C> size_t PoolAllocator<S, C>::CurrentOffset = 0;
-template<size_t S, size_t C> std::vector<char*> PoolAllocator<S, C>::Chunks;
-
 #define FORCE_INLINE __attribute__((always_inline)) inline
-
-// ==========================================
-// ВСПОМОГАТЕЛЬНЫЕ СТРУКТУРЫ
-// ==========================================
 
 template<uint64_t W>
 struct UIntSelector {
-  using type =
-      typename std::conditional<
-          W <= 8, uint8_t,
-          typename std::conditional<
-              W <= 16,
-              uint16_t,
-              typename std::conditional<W <= 32, uint32_t, uint64_t>::type
-          >::type
-      >::type;
+  using type = typename std::conditional<W <= 8, uint8_t,
+                                         typename std::conditional<W <= 16,
+                                                                   uint16_t,
+                                                                   typename std::conditional<
+                                                                       W <= 32,
+                                                                       uint32_t,
+                                                                       uint64_t>::type>::type>::type;
 };
 
-FORCE_INLINE int CountTrailingZeros(uint64_t mask) {
-  return __builtin_ctzll(mask);
-}
-
-FORCE_INLINE int CountLeadingZeros(uint64_t mask) {
-  return __builtin_clzll(mask);
-}
-
-}
+FORCE_INLINE int CountTrailingZeros(uint64_t mask) { return __builtin_ctzll(mask); }
+FORCE_INLINE int CountLeadingZeros(uint64_t mask) { return __builtin_clzll(mask); }
 
 template<const uint64_t WIDTH = 32, typename T = typename UIntSelector<WIDTH>::type, typename Enable = void>
 class TVEBSet;
 
 // ==========================================
-// BASE CASE (WIDTH <= 4)
+// BASE CASE (WIDTH <= 8)
 // ==========================================
 template<const uint64_t WIDTH, typename T>
-class TVEBSet<WIDTH, T, typename std::enable_if<(WIDTH <= 4)>::type> {
-  uint64_t Data_ = 0;
+class TVEBSet<WIDTH, T, typename std::enable_if<(WIDTH <= 8)>::type> {
+  static constexpr size_t
+      WORDS = (1ULL << WIDTH) <= 64 ? 1 : (1ULL << (WIDTH - 6));
+  uint64_t Data_[WORDS] = {0};
 
  public:
-  static void* operator new(size_t size) {
-    return PoolAllocator<sizeof(TVEBSet)>::allocate(size);
-  }
-  static void operator delete(void* ptr) {
-    PoolAllocator<sizeof(TVEBSet)>::deallocate(ptr, sizeof(TVEBSet));
-  }
 
   TVEBSet() = default;
-  explicit TVEBSet(T value) { Data_ = (1ULL << value); }
+  explicit TVEBSet(T value) { Insert(value); }
 
-  [[nodiscard]] FORCE_INLINE bool Empty() const { return Data_ == 0; }
+  [[nodiscard]] FORCE_INLINE bool Empty() const {
+    for (size_t i = 0; i < WORDS; ++i) {
+      if (Data_[i]) return false;
+    }
+    return true;
+  }
 
-  FORCE_INLINE void Insert(T value) { Data_ |= (1ULL << value); }
-  FORCE_INLINE void Erase(T value) { Data_ &= ~(1ULL << value); }
+  FORCE_INLINE void Insert(T value) {
+
+    Data_[value >> 6] |= (1ULL << (value & 63));
+  }
+
+  FORCE_INLINE void Erase(T value) {
+    Data_[value >> 6] &= ~(1ULL << (value & 63));
+  }
+
   [[nodiscard]] FORCE_INLINE bool Contains(T value) const {
-    return (Data_ >> value) & 1ULL;
+    return (Data_[value >> 6] >> (value & 63)) & 1ULL;
   }
 
   [[nodiscard]] FORCE_INLINE T Min() const {
-    return Data_ ? static_cast<T>(CountTrailingZeros(Data_)) : 0;
+    for (size_t i = 0; i < WORDS; ++i) {
+      if (Data_[i])
+        return static_cast<T>((i << 6) + CountTrailingZeros(Data_[i]));
+    }
+    return 0;
   }
 
   [[nodiscard]] FORCE_INLINE T Max() const {
-    return Data_ ? static_cast<T>(63 - CountLeadingZeros(Data_)) : 0;
+    for (int i = WORDS - 1; i >= 0; --i) {
+      if (Data_[i])
+        return static_cast<T>((i << 6) + (63 - CountLeadingZeros(Data_[i])));
+    }
+    return 0;
   }
 
   [[nodiscard]] FORCE_INLINE std::optional<T> Next(T value) const {
-    if (value >= 63) return std::nullopt;
-    uint64_t mask = Data_ & ~((1ULL << (value + 1)) - 1);
-    if (mask == 0) return std::nullopt;
-    return static_cast<T>(CountTrailingZeros(mask));
+    auto res = NextInner(value);
+    if (res == value) {
+      return std::nullopt;
+    }
+    return res;
   }
 
   [[nodiscard]] FORCE_INLINE std::optional<T> Prev(T value) const {
-    if (value == 0) return std::nullopt;
-    uint64_t mask = Data_ & ((1ULL << value) - 1);
-    if (mask == 0) return std::nullopt;
-    return static_cast<T>(63 - CountLeadingZeros(mask));
+    auto res = PrevInner(value);
+    if (res == value) {
+      return std::nullopt;
+    }
+    return res;
   }
 
+ private:
+
   [[nodiscard]] FORCE_INLINE T NextInner(T value) const {
-    auto res = Next(value);
-    return res.value_or(value);
+    if (value >= (1ULL << WIDTH) - 1) return value;
+
+    size_t wordIdx = value >> 6;
+    size_t bitIdx = value & 63;
+
+    uint64_t mask = 0;
+    if (bitIdx < 63) {
+      mask = Data_[wordIdx] & ~((1ULL << (bitIdx + 1)) - 1);
+    }
+
+    if (mask) {
+      return static_cast<T>((wordIdx << 6) + CountTrailingZeros(mask));
+    }
+
+    for (size_t i = wordIdx + 1; i < WORDS; ++i) {
+      if (Data_[i]) {
+        return static_cast<T>((i << 6) + CountTrailingZeros(Data_[i]));
+      }
+    }
+
+    return value;
   }
 
   [[nodiscard]] FORCE_INLINE T PrevInner(T value) const {
-    auto res = Prev(value);
-    return res.value_or(value);
+    if (value == 0) return value;
+
+    size_t wordIdx = value >> 6;
+    size_t bitIdx = value & 63;
+
+    uint64_t mask = Data_[wordIdx] & ((1ULL << bitIdx) - 1);
+
+    if (mask) {
+      return static_cast<T>((wordIdx << 6) + (63 - CountLeadingZeros(mask)));
+    }
+
+    for (int i = static_cast<int>(wordIdx) - 1; i >= 0; --i) {
+      if (Data_[i]) {
+        return static_cast<T>((i << 6) + (63 - CountLeadingZeros(Data_[i])));
+      }
+    }
+
+    return value;
   }
 
   template<const uint64_t W, typename U, typename E> friend
@@ -170,12 +149,10 @@ class TVEBSet<WIDTH, T, typename std::enable_if<(WIDTH <= 4)>::type> {
 };
 
 // ==========================================
-// INTERMEDIATE CASE (4 < WIDTH <= 16)
+// COMMON CASE (WIDTH > 8)
 // ==========================================
 template<const uint64_t WIDTH, typename T>
-class TVEBSet<WIDTH,
-              T,
-              typename std::enable_if<(WIDTH > 4 && WIDTH <= 16)>::type> {
+class TVEBSet<WIDTH, T, typename std::enable_if<(WIDTH > 8)>::type> {
   static_assert(sizeof(T) * 8 >= WIDTH, "T too small");
 
   static constexpr uint64_t LOWER_WIDTH = WIDTH / 2;
@@ -189,18 +166,9 @@ class TVEBSet<WIDTH,
   bool IsEmpty_ = true;
 
  public:
-  static void* operator new(size_t size) {
-    return PoolAllocator<sizeof(TVEBSet)>::allocate(size);
-  }
-  static void operator delete(void* ptr) {
-    PoolAllocator<sizeof(TVEBSet)>::deallocate(ptr,
-                                               sizeof(TVEBSet));
-  }
-
   explicit TVEBSet() {
     std::memset(Subsets_, 0, sizeof(Subsets_));
   }
-
   explicit TVEBSet(T value) : TVEBSet() {
     Min_ = Max_ = value;
     IsEmpty_ = false;
@@ -294,7 +262,7 @@ class TVEBSet<WIDTH,
     if (Subsets_[high]) eraseChild(high, low);
   }
 
-  [[nodiscard]] FORCE_INLINE bool Contains(T value) const {
+  [[nodiscard]] bool Contains(T value) const {
     if (Empty()) return false;
     if (value == Min_ || value == Max_) return true;
     auto child = Subsets_[value >> LOWER_WIDTH];
@@ -313,7 +281,8 @@ class TVEBSet<WIDTH,
     return std::nullopt;
   }
 
-  [[nodiscard]] FORCE_INLINE T NextInner(T value) const {
+ private:
+  [[nodiscard]] T NextInner(T value) const {
     if (Empty() || value >= Max_) return value;
     if (value < Min_) return Min_;
 
@@ -332,7 +301,7 @@ class TVEBSet<WIDTH,
     return (nextHigh << LOWER_WIDTH) + Subsets_[nextHigh]->Min();
   }
 
-  [[nodiscard]] FORCE_INLINE T PrevInner(T value) const {
+  [[nodiscard]] T PrevInner(T value) const {
     if (Empty() || value <= Min_) return value;
     if (value > Max_) return Max_;
 
@@ -355,179 +324,4 @@ class TVEBSet<WIDTH,
   class TVEBSet;
 };
 
-
-// ==========================================
-// ROOT (WIDTH > 16)
-// ==========================================
-template<const uint64_t WIDTH, typename T, typename Enable>
-class TVEBSet {
-  static constexpr size_t LOWER_BITS_COUNT = 16;
-  static constexpr size_t HIGHER_BITS_COUNT = WIDTH - LOWER_BITS_COUNT;
-
-  static constexpr T LOWER_MASK = (static_cast<T>(1) << LOWER_BITS_COUNT) - 1;
-
- public:
-  explicit TVEBSet() = default;
-
-  ~TVEBSet() {
-    for (auto& pair : Subsets_) {
-      delete pair.second;
-    }
-    Subsets_.clear();
-  }
-
-  [[nodiscard]] FORCE_INLINE bool Empty() const { return IsEmpty_; }
-  [[nodiscard]] FORCE_INLINE T Min() const { return Min_; }
-  [[nodiscard]] FORCE_INLINE T Max() const { return Max_; }
-
-  void Insert(T value) {
-    if (Empty()) {
-      IsEmpty_ = false;
-      Min_ = Max_ = value;
-      return;
-    }
-    if (value == Min_ || value == Max_) return;
-
-    if (Min_ == Max_) {
-      Min_ = std::min(Min_, value);
-      Max_ = std::max(Max_, value);
-      return;
-    }
-
-    if (value < Min_) std::swap(Min_, value);
-    else if (value > Max_) std::swap(Max_, value);
-
-    T high = value >> LOWER_BITS_COUNT;
-    T low = value & LOWER_MASK;
-
-    auto it = Subsets_.find(high);
-    if (it == Subsets_.end()) {
-      auto* newSubset = new TVEBSet<LOWER_BITS_COUNT>(low);
-      Subsets_.emplace(high, newSubset);
-    } else {
-      it->second->Insert(low);
-    }
-  }
-
-  void Erase(T value) {
-    if (Empty()) return;
-
-    if (Min_ == Max_) {
-      if (value == Min_) {
-        Min_ = Max_ = 0;
-        IsEmpty_ = true;
-      }
-      return;
-    }
-
-    auto eraseChild = [&](auto childIt, T childValue) {
-      childIt->second->Erase(childValue);
-      if (childIt->second->Empty()) {
-        delete childIt->second;
-        Subsets_.erase(childIt);
-      }
-    };
-
-    if (value == Min_) {
-      if (Subsets_.empty()) {
-        Min_ = Max_;
-        return;
-      }
-
-      auto it = Subsets_.begin();
-      T high = it->first;
-      T low = it->second->Min();
-
-      Min_ = (high << LOWER_BITS_COUNT) | low;
-
-      eraseChild(it, low);
-      return;
-    }
-
-    if (value == Max_) {
-      if (Subsets_.empty()) {
-        Max_ = Min_;
-        return;
-      }
-
-      auto it = Subsets_.rbegin();
-      T high = it->first;
-      T low = it->second->Max();
-
-      Max_ = (high << LOWER_BITS_COUNT) | low;
-
-      eraseChild(std::prev(it.base()), low);
-      return;
-    }
-
-    T high = value >> LOWER_BITS_COUNT;
-    T low = value & LOWER_MASK;
-
-    auto it = Subsets_.find(high);
-    if (it != Subsets_.end()) {
-      eraseChild(it, low);
-    }
-  }
-
-  [[nodiscard]] FORCE_INLINE bool Contains(T value) const {
-    if (Empty()) return false;
-    if (value == Min_ || value == Max_) return true;
-
-    T high = value >> LOWER_BITS_COUNT;
-    T low = value & LOWER_MASK;
-
-    auto it = Subsets_.find(high);
-    return it != Subsets_.end() && it->second->Contains(low);
-  }
-
-  [[nodiscard]] std::optional<T> Next(T value) const {
-    if (Empty() || value >= Max_) return std::nullopt;
-    if (value < Min_) return Min_;
-
-    T high = value >> LOWER_BITS_COUNT;
-    T low = value & LOWER_MASK;
-
-    if (auto it = Subsets_.find(high); it != Subsets_.end()) {
-      auto nextLow = it->second->NextInner(low);
-      if (nextLow > low) {
-        return (high << LOWER_BITS_COUNT) | nextLow;
-      }
-    }
-
-    if (auto itNext = Subsets_.upper_bound(high); itNext != Subsets_.end()) {
-      return (itNext->first << LOWER_BITS_COUNT) | itNext->second->Min();
-    }
-
-    return Max_;
-  }
-
-  [[nodiscard]] std::optional<T> Prev(T value) const {
-    if (Empty() || value <= Min_) return std::nullopt;
-    if (value > Max_) return Max_;
-
-    T high = value >> LOWER_BITS_COUNT;
-    T low = value & LOWER_MASK;
-
-    if (auto it = Subsets_.find(high); it != Subsets_.end()) {
-      auto prevLow = it->second->PrevInner(low);
-      if (prevLow < low) {
-        return (high << LOWER_BITS_COUNT) | prevLow;
-      }
-    }
-
-    if (auto itNext = Subsets_.lower_bound(high); itNext != Subsets_.begin()) {
-      auto itPrev = std::prev(itNext);
-      return (itPrev->first << LOWER_BITS_COUNT) | itPrev->second->Max();
-    }
-
-    return Min_;
-  }
-
- private:
-  std::map<T, TVEBSet<LOWER_BITS_COUNT>*> Subsets_;
-  T Min_ = 0;
-  T Max_ = 0;
-  bool IsEmpty_ = true;
-};
-
-}  // namespace veb
+} // namespace veb
