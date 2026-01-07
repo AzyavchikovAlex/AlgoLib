@@ -2,68 +2,129 @@
 
 #include <random>
 #include <chrono>
+#include <vector>
+#include <algorithm>
+#include <numeric>
 
 #include <benchmark/benchmark.h>
 
-void MeasureRadix(benchmark::State& state) {
-  std::vector<int64_t> data(state.range(0));
-  std::mt19937 rng(std::random_device{}());
-  std::uniform_int_distribution<int64_t> dist{0, std::numeric_limits<int64_t>::max()};
-  std::generate(data.begin(), data.end(), [&]() { return dist(rng); });
+class RandomDataFixture : public benchmark::Fixture {
+ public:
+  std::vector<std::vector<uint64_t>> DataPool;
+  size_t CurrentIndex = 0;
+  static constexpr size_t POOL_SIZE = 10;
 
-  for (auto _ : state) {
-    auto v = data;
-    RadixSortAsc(v.begin(), v.end(), [](int64_t x) {
-      return x;
-    });
-    benchmark::ClobberMemory(); // Prevents the compiler from optimizing away the copy and sort.
+  void SetUp(const ::benchmark::State& state) override {
+    size_t size = state.range(0);
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    DataPool.reserve(POOL_SIZE);
+
+    for (size_t i = 0; i < POOL_SIZE; ++i) {
+      std::vector<uint64_t> temp_vec(size);
+      std::iota(temp_vec.begin(), temp_vec.end(), 0);
+      std::shuffle(temp_vec.begin(), temp_vec.end(), g);
+      DataPool.push_back(std::move(temp_vec));
+    }
   }
+
+  void TearDown(const ::benchmark::State& state) override {
+    DataPool.clear();
+  }
+
+  template<typename Sorter>
+  void RunSortBenchmark(benchmark::State& state, Sorter sorter) {
+    for (auto _ : state) {
+      state.PauseTiming();
+      // Get the next dataset from our pre-generated pool
+      const auto& unsortedData = DataPool[CurrentIndex++ % POOL_SIZE];
+
+      // Make a copy so the original remains unsorted
+      auto v = unsortedData;
+      state.ResumeTiming();
+
+      // Call the specific sort function that was passed in
+      sorter(v.begin(), v.end());
+
+      // Prevent the compiler from optimizing the sort away
+      benchmark::ClobberMemory();
+    }
+  }
+};
+
+BENCHMARK_DEFINE_F(RandomDataFixture, StdSort)(benchmark::State& state) {
+  RunSortBenchmark(state, [](auto begin, auto end) {
+    std::sort(begin, end);
+  });
 }
 
-void MeasureStd(benchmark::State& state) {
-  std::vector<int64_t> data(state.range(0));
-  std::mt19937 rng(std::random_device{}());
-  std::uniform_int_distribution<int64_t> dist{0, std::numeric_limits<int64_t>::max()};
-  std::generate(data.begin(), data.end(), [&]() { return dist(rng); });
+BENCHMARK_REGISTER_F(RandomDataFixture, StdSort)
+    ->Range(2 << 14, 2 << 20)
+    ->ArgNames({"ArraySize"});
 
-  // The main benchmark loop. Timing starts automatically here.
-  for (auto _ : state) {
-    // --- TIMED CODE ---
-    // Create a copy to avoid timing the setup of already sorted data in subsequent iterations.
-    auto v = data;
-    std::sort(v.begin(), v.end(), [](auto& x, auto& y) {
-      return x < y;
+BENCHMARK_DEFINE_F(RandomDataFixture, RadixSort)(benchmark::State& state) {
+  RunSortBenchmark(state, [](auto begin, auto end) {
+    RadixSortAsc(begin, end, [](uint64_t x) {
+      return static_cast<uint64_t>(x);
     });
-    benchmark::ClobberMemory(); // Prevents the compiler from optimizing away the copy and sort.
-  }
+  });
 }
 
-BENCHMARK(MeasureRadix)->Arg(1 << 11);
-BENCHMARK(MeasureStd)->Arg(1 << 11);
-BENCHMARK(MeasureRadix)->Arg(1 << 12);
-BENCHMARK(MeasureStd)->Arg(1 << 12);
-BENCHMARK(MeasureRadix)->Arg(1 << 13);
-BENCHMARK(MeasureStd)->Arg(1 << 13);
-BENCHMARK(MeasureRadix)->Arg(1 << 14);
-BENCHMARK(MeasureStd)->Arg(1 << 14);
-BENCHMARK(MeasureRadix)->Arg(1 << 15);
-BENCHMARK(MeasureStd)->Arg(1 << 15);
-BENCHMARK(MeasureRadix)->Arg(1 << 16);
-BENCHMARK(MeasureStd)->Arg(1 << 16);
-BENCHMARK(MeasureRadix)->Arg(1 << 17);
-BENCHMARK(MeasureStd)->Arg(1 << 17);
-BENCHMARK(MeasureRadix)->Arg(1 << 18);
-BENCHMARK(MeasureStd)->Arg(1 << 18);
-BENCHMARK(MeasureRadix)->Arg(1 << 19);
-BENCHMARK(MeasureStd)->Arg(1 << 19);
-BENCHMARK(MeasureRadix)->Arg(1 << 20);
-BENCHMARK(MeasureStd)->Arg(1 << 20);
-BENCHMARK(MeasureRadix)->Arg(1 << 21);
-BENCHMARK(MeasureStd)->Arg(1 << 21);
-BENCHMARK(MeasureRadix)->Arg(1 << 22);
-BENCHMARK(MeasureStd)->Arg(1 << 22);
-BENCHMARK(MeasureRadix)->Arg(1 << 23);
-BENCHMARK(MeasureStd)->Arg(1 << 23);
+BENCHMARK_REGISTER_F(RandomDataFixture, RadixSort)
+    ->Range(2 << 14, 2 << 20)
+    ->ArgNames({"ArraySize"});
 
+
+class AlmostSortedDataFixture : public RandomDataFixture {
+ public:
+  void SetUp(const ::benchmark::State& state) override {
+    size_t size = state.range(0);
+    size_t notSortedPositionsCount = static_cast<size_t>(0.15 * size);
+
+    std::random_device rd;
+    std::mt19937 g(rd());
+    assert(size > 0);
+    std::uniform_int_distribution<size_t> indexesDist{0, size - 1};
+    std::uniform_int_distribution<uint64_t> valuesDist{0, std::numeric_limits<uint64_t>::max()};
+
+    DataPool.reserve(POOL_SIZE);
+
+    for (size_t i = 0; i < POOL_SIZE; ++i) {
+      std::vector<uint64_t> temp_vec(size);
+      std::iota(temp_vec.begin(), temp_vec.end(), 0);
+
+      // set to some random positions random values
+      for (size_t j = 0; j < notSortedPositionsCount; ++j) {
+        size_t pos = indexesDist(g);
+        temp_vec[pos] = valuesDist(g);
+      }
+      DataPool.push_back(std::move(temp_vec));
+    }
+  }
+};
+
+BENCHMARK_DEFINE_F(AlmostSortedDataFixture, StdSort)(benchmark::State& state) {
+  RunSortBenchmark(state, [](auto begin, auto end) {
+    std::sort(begin, end);
+  });
+}
+
+BENCHMARK_REGISTER_F(AlmostSortedDataFixture, StdSort)
+    ->Range(2 << 14, 2 << 20)
+    ->ArgNames({"ArraySize"});
+
+BENCHMARK_DEFINE_F(AlmostSortedDataFixture, RadixSort)(benchmark::State& state) {
+  RunSortBenchmark(state, [](auto begin, auto end) {
+    RadixSortAsc(begin, end, [](uint64_t x) {
+      return static_cast<uint64_t>(x);
+    });
+  });
+}
+
+BENCHMARK_REGISTER_F(AlmostSortedDataFixture, RadixSort)
+    ->Range(2 << 14, 2 << 20)
+    ->ArgNames({"ArraySize"});
 
 BENCHMARK_MAIN();
