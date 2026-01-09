@@ -13,6 +13,15 @@ std::mt19937_64 gen(time(nullptr));
 std::uniform_int_distribution<uint32_t>
     distrib(0, std::numeric_limits<uint32_t>::max());
 
+template<size_t W = 32, typename F>
+void RunTestWithDifferentWidth(size_t size, F test) {
+  test.template operator()<W>(size);
+
+  if constexpr (W > 1) {
+    RunTestWithDifferentWidth<W - 1>(size, test);
+  }
+}
+
 template<size_t WIDTH = 32>
 void TestContainsMethod(size_t size) {
   std::unordered_set<uint64_t> values;
@@ -38,18 +47,23 @@ void TestContainsMethod(size_t size) {
 }
 
 TEST(BasicOperations, Medium) {
-  TestContainsMethod(4000);
+  auto runner = []<size_t N>(size_t size) {
+    TestContainsMethod<N>(size);
+  };
+
+  RunTestWithDifferentWidth<32>(2000, runner);
 }
 
 TEST(BasicOperations, Large) {
   TestContainsMethod(200'000);
 }
 
+template <size_t WIDTH = 32>
 void TestNextFunction(size_t size) {
   std::set<uint32_t> s;
-  TVEBSet<32> veb_set;
+  TVEBSet<WIDTH> veb_set;
   for (size_t i = 0; i < size; ++i) {
-    uint32_t val = distrib(gen);
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
     s.insert(val);
     veb_set.Insert(val);
   }
@@ -63,7 +77,7 @@ void TestNextFunction(size_t size) {
   }
 
   for (size_t i = 0; i < size; ++i) {
-    uint32_t val = distrib(gen);
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
 
     auto it = s.upper_bound(val);
     if (it == s.end()) {
@@ -75,15 +89,19 @@ void TestNextFunction(size_t size) {
 }
 
 TEST(Next, Medium) {
-  TestNextFunction(10'000);
+  auto runner = []<size_t N>(size_t size) {
+    TestNextFunction<N>(size);
+  };
+  RunTestWithDifferentWidth<32>(10'000, runner);
 }
 
+template <size_t WIDTH = 32>
 void TestPrevFunction(size_t size) {
   std::set<uint32_t> s;
-  TVEBSet<32> veb_set;
+  TVEBSet<WIDTH> veb_set;
 
   for (size_t i = 0; i < size; ++i) {
-    uint32_t val = distrib(gen);
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
     s.insert(val);
     veb_set.Insert(val);
   }
@@ -99,7 +117,7 @@ void TestPrevFunction(size_t size) {
   }
 
   for (size_t i = 0; i < size; ++i) {
-    uint32_t val = distrib(gen);
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
 
     auto it = s.lower_bound(val);
     if (it == s.begin()) {
@@ -111,7 +129,80 @@ void TestPrevFunction(size_t size) {
 }
 
 TEST(Prev, Medium) {
-  TestPrevFunction(10'000);
+  auto runner = []<size_t N>(size_t size) {
+    TestPrevFunction<N>(size);
+  };
+  RunTestWithDifferentWidth<32>(10'000, runner);
+}
+
+template <size_t WIDTH = 32>
+void ComplexTest(size_t size) {
+  std::set<uint32_t> s;
+  TVEBSet<WIDTH> veb_set;
+
+  auto insert_random = [&s, &veb_set]() {
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
+    s.insert(val);
+    veb_set.Insert(val);
+
+    ASSERT_TRUE(veb_set.Contains(val));
+  };
+
+  auto delete_random = [&s, &veb_set]() {
+    if (s.empty()) {
+      return;
+    }
+    size_t index = distrib(gen) % s.size();
+    uint32_t val = *std::next(s.begin(), index);
+
+    ASSERT_TRUE(veb_set.Contains(val));
+    s.erase(val);
+    veb_set.Erase(val);
+    ASSERT_FALSE(veb_set.Contains(val));
+  };
+
+  auto next_query = [&s, &veb_set] {
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
+
+    auto it = s.upper_bound(val);
+    if (it != s.end()) {
+      ASSERT_EQ(veb_set.Next(val), *it);
+    } else {
+      ASSERT_EQ(veb_set.Next(val), std::nullopt);
+    }
+  };
+
+  auto prev_query = [&s, &veb_set] {
+    uint32_t val = distrib(gen) % (1ULL << WIDTH);
+
+    auto it = s.lower_bound(val);
+    if (it != s.begin()) {
+      ASSERT_EQ(veb_set.Prev(val), *std::prev(it, 1));
+    } else {
+      ASSERT_EQ(veb_set.Prev(val), std::nullopt);
+    }
+  };
+
+
+  for (size_t i = 0; i < size; ++i) {
+    insert_random();
+
+    for (size_t j = 0; j < 10; ++j) {
+      next_query();
+      prev_query();
+    }
+  }
+
+  for (size_t i = 0; i < size; ++i) {
+    insert_random();
+    delete_random();
+
+    for (size_t j = 0; j < 10; ++j) {
+      next_query();
+      prev_query();
+    }
+    delete_random();
+  }
 }
 
 TEST(Complex, Small) {
@@ -176,22 +267,15 @@ TEST(Complex, Small) {
   ASSERT_TRUE(!veb.Contains(10));
 }
 
-template<size_t W = 32>
-void TestDifferentWidths(size_t size) {
-  TestContainsMethod<W>(size);
+TEST(Complex, Meduim) {
 
-  if constexpr (W > 1) {
-    TestDifferentWidths<W - 1>(size);
-  }
+  auto runner = []<size_t N>(size_t size) {
+    ComplexTest<N>(size);
+  };
+
+  RunTestWithDifferentWidth<32>(2'000, runner);
 }
 
-TEST(WIDTH, BasicTests) {
-  TestDifferentWidths<32>(100);
-}
-
-TEST(WIDTH, 33) {
-  TestDifferentWidths<33>(100);
-}
 
 
 
